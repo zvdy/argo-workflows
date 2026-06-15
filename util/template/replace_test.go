@@ -105,6 +105,66 @@ func Test_Replace(t *testing.T) {
 	})
 }
 
+// Test_ReplaceStrict_NilCoalescing verifies that the strict missing-variable
+// check honors the nil-coalescing (??) and optional-chaining (?.) operators: a
+// loop item that omits an optional key, guarded by the author's default, must
+// resolve to the fallback rather than fail the pre-flight check.
+// See https://github.com/argoproj/argo-workflows/issues/15513.
+func Test_ReplaceStrict_NilCoalescing(t *testing.T) {
+	ctx := logging.TestContext(t.Context())
+	itemPresent := map[string]any{"item": map[string]any{"name": "a", "optionalKey": "value"}}
+	itemMissing := map[string]any{"item": map[string]any{"name": "b"}}
+
+	tests := []struct {
+		name        string
+		expression  string
+		wantPresent string
+		wantMissing string
+	}{
+		{
+			name:        "nil-coalescing",
+			expression:  `{{= item.optionalKey ?? 'fallback' }}`,
+			wantPresent: "value",
+			wantMissing: "fallback",
+		},
+		{
+			name:        "nil-coalescing with bracket notation",
+			expression:  `{{= item['optionalKey'] ?? 'fallback' }}`,
+			wantPresent: "value",
+			wantMissing: "fallback",
+		},
+		{
+			name:        "optional chaining with nil-coalescing",
+			expression:  `{{= item?.optionalKey ?? 'fallback' }}`,
+			wantPresent: "value",
+			wantMissing: "fallback",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl, err := NewTemplate(tt.expression)
+			require.NoError(t, err)
+
+			out, err := tmpl.ReplaceStrict(ctx, itemPresent, []string{"item"})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantPresent, out)
+
+			out, err = tmpl.ReplaceStrict(ctx, itemMissing, []string{"item"})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMissing, out)
+		})
+	}
+
+	t.Run("missing base variable still fails strict check", func(t *testing.T) {
+		// The base variable being absent (as opposed to an optional key) must
+		// still be reported as missing so the workflow requeues.
+		tmpl, err := NewTemplate(`{{= item.optionalKey ?? 'fallback' }}`)
+		require.NoError(t, err)
+		_, err = tmpl.ReplaceStrict(ctx, map[string]any{}, []string{"item"})
+		require.EqualError(t, err, "failed to evaluate expression: item is missing")
+	})
+}
+
 func TestNestedReplaceString(t *testing.T) {
 	ctx := logging.TestContext(t.Context())
 	replaceMap := map[string]string{"inputs.parameters.message": "hello world"}

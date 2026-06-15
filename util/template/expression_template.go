@@ -88,9 +88,17 @@ func expressionReplaceStrict(ctx context.Context, w io.Writer, expression string
 type identifierVisitor struct {
 	identifiers []string
 	seen        map[string]bool
+	// guarded holds AST member nodes whose access is guarded by the
+	// nil-coalescing (??) or optional-chaining (?.) operators. The values they
+	// reference are allowed to be missing at runtime, so they must not be
+	// treated as strictly-required identifiers.
+	guarded map[ast.Node]bool
 }
 
 func (v *identifierVisitor) Visit(node *ast.Node) {
+	if v.guarded[*node] {
+		return
+	}
 	if n, ok := (*node).(*ast.IdentifierNode); ok {
 		if !v.seen[n.Value] {
 			v.identifiers = append(v.identifiers, n.Value)
@@ -112,6 +120,11 @@ func getMemberPath(node *ast.MemberNode) (string, bool) {
 	var parts []string
 	curr := node
 	for {
+		// An optional access (e.g. "item?.optionalKey") tolerates a missing
+		// value, so the path must not be treated as strictly-required.
+		if curr.Optional {
+			return "", false
+		}
 		prop, ok := curr.Property.(*ast.StringNode)
 		if !ok {
 			return "", false
@@ -131,13 +144,59 @@ func getMemberPath(node *ast.MemberNode) (string, bool) {
 	}
 }
 
+// guardVisitor collects the member nodes whose access is guarded by the
+// nil-coalescing (??) or optional-chaining (?.) operators. These operators
+// define the missing-value behavior themselves, so the guarded member paths
+// must not be reported as strictly-required identifiers. Base identifiers are
+// intentionally left untouched so that a genuinely-unavailable variable (e.g.
+// the output of a not-yet-completed task) still triggers a requeue.
+type guardVisitor struct {
+	guarded map[ast.Node]bool
+}
+
+func (v *guardVisitor) Visit(node *ast.Node) {
+	switch n := (*node).(type) {
+	case *ast.BinaryNode:
+		// "left ?? right": every member path in the left operand may resolve to
+		// a missing value, with "right" as the fallback.
+		if n.Operator == "??" {
+			ast.Walk(&n.Left, &memberMarker{guarded: v.guarded})
+		}
+	case *ast.MemberNode:
+		// "x?.prop": the receiver "x" may be nil, so guard its member path too.
+		// The optional access itself ("x?.prop") is already handled by
+		// getMemberPath bailing on the Optional flag.
+		if n.Optional {
+			if _, ok := n.Node.(*ast.MemberNode); ok {
+				v.guarded[n.Node] = true
+			}
+		}
+	}
+}
+
+// memberMarker marks every member node in a subtree as guarded. Identifier
+// nodes are deliberately not marked so that a missing base variable still
+// triggers the strict missing-variable check.
+type memberMarker struct {
+	guarded map[ast.Node]bool
+}
+
+func (m *memberMarker) Visit(node *ast.Node) {
+	if _, ok := (*node).(*ast.MemberNode); ok {
+		m.guarded[*node] = true
+	}
+}
+
 func getIdentifiers(expression string) ([]string, error) {
 	tree, err := parser.Parse(expression)
 	if err != nil {
 		return nil, err
 	}
+	guarded := make(map[ast.Node]bool)
+	ast.Walk(&tree.Node, &guardVisitor{guarded: guarded})
 	visitor := &identifierVisitor{
-		seen: make(map[string]bool),
+		seen:    make(map[string]bool),
+		guarded: guarded,
 	}
 	ast.Walk(&tree.Node, visitor)
 	return visitor.identifiers, nil
