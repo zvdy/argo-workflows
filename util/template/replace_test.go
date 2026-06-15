@@ -105,10 +105,6 @@ func Test_Replace(t *testing.T) {
 	})
 }
 
-// Test_ReplaceStrict_NilCoalescing verifies that the strict missing-variable
-// check honors the nil-coalescing (??) and optional-chaining (?.) operators: a
-// loop item that omits an optional key, guarded by the author's default, must
-// resolve to the fallback rather than fail the pre-flight check.
 // See https://github.com/argoproj/argo-workflows/issues/15513.
 func Test_ReplaceStrict_NilCoalescing(t *testing.T) {
 	ctx := logging.TestContext(t.Context())
@@ -156,8 +152,6 @@ func Test_ReplaceStrict_NilCoalescing(t *testing.T) {
 	}
 
 	t.Run("missing base variable still fails strict check", func(t *testing.T) {
-		// The base variable being absent (as opposed to an optional key) must
-		// still be reported as missing so the workflow requeues.
 		tmpl, err := NewTemplate(`{{= item.optionalKey ?? 'fallback' }}`)
 		require.NoError(t, err)
 		_, err = tmpl.ReplaceStrict(ctx, map[string]any{}, []string{"item"})
