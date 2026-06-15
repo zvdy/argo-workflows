@@ -6,6 +6,7 @@ import (
 	"github.com/expr-lang/expr/file"
 	"github.com/expr-lang/expr/parser/lexer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_hasVarInEnv(t *testing.T) {
@@ -98,6 +99,57 @@ func Test_hasVarInEnv(t *testing.T) {
 		env := map[string]any{"foo": "bar"}
 		assert.False(t, hasVarInEnv(env, "foo.bar"))
 	})
+}
+
+func Test_getIdentifiers(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+		want       []string
+	}{
+		{
+			name:       "plain member path is required",
+			expression: "item.requiredKey",
+			want:       []string{"item", "item.requiredKey"},
+		},
+		{
+			name:       "nil-coalescing guards the member path but keeps the base variable",
+			expression: "item.optionalKey ?? 'fallback'",
+			want:       []string{"item"},
+		},
+		{
+			name:       "nil-coalescing with bracket notation is guarded",
+			expression: "item['optionalKey'] ?? ''",
+			want:       []string{"item"},
+		},
+		{
+			name:       "optional chaining is guarded",
+			expression: "item?.optionalKey",
+			want:       []string{"item"},
+		},
+		{
+			name:       "optional chaining also guards the optional receiver",
+			expression: "item.a?.b",
+			want:       []string{"item"},
+		},
+		{
+			name:       "only the guarded member path is skipped",
+			expression: "item.requiredKey + (item.optionalKey ?? 'x')",
+			want:       []string{"item", "item.requiredKey"},
+		},
+		{
+			name:       "base variable stays required so requeue still works",
+			expression: "tasks.a.outputs.result ?? 'default'",
+			want:       []string{"tasks"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getIdentifiers(tt.expression)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tt.want, got)
+		})
+	}
 }
 
 func Test_hasVariableInExpression(t *testing.T) {
