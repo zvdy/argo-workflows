@@ -76,10 +76,40 @@ controller with PR #16274.
 
 ![Fixed containers](screenshots/08-fixed-containers.png)
 
+### This is a regression — it worked on v3.6
+
+The same `repro-workflow.yaml`, run under a **v3.6.19 `workflow-controller`** (built from the `v3.6.19`
+tag, expr-lang v1.17.7) against the same control plane: the workflow is **Running**, both `withItems`
+expand, and the missing key resolves to `fallback` — exactly the behavior the fix restores.
+
+**Workflow summary on v3.6 — `Running`, no error message:**
+
+![v3.6 summary](screenshots/v3.6/01-summary-running.png)
+
+**Graph on v3.6 — both items expand:**
+
+![v3.6 graph](screenshots/v3.6/02-graph.png)
+
+**Inputs on v3.6 — the guarded missing key resolves to `fallback`:**
+
+![v3.6 inputs](screenshots/v3.6/03-inputs-fallback.png)
+
 ## Version(s)
 
-`v3.7.15`; reproduced on `main` (the pre-check in `util/template/expression_template.go` is unchanged
-upstream). Present in any version containing #15442.
+**Regression introduced by #15442.** Bisection across release tags and a functional check of each
+version's actual `util/template` code:
+
+| Version | Strict member-path "is missing" pre-check | `item.optionalKey ?? 'fallback'` (missing key, strict) |
+|---|---|---|
+| `v3.6.0` – `v3.6.19` | absent | ✅ resolves to `fallback` (verified in UI + unit) |
+| `v3.7.0` – `v3.7.10` | absent | ✅ resolves to `fallback` |
+| **`v3.7.11`+** (and 4.0 line via #15656) | **present** | ❌ `failed to evaluate expression: item.optionalKey is missing` |
+| `main` / `v3.7.15` / `v4.x` | present | ❌ same error |
+
+The check lives in `util/template/expression_template.go` (`getIdentifiers` → `getMemberPath`), added
+by #15442 (`d84169f`), cherry-picked to 3.7 in #15657. It is **not** present in any `v3.6.x` release —
+on 3.6 the strict path goes straight to `expr.Compile`/`expr.Run`, where expr-lang's own `??` / `?.`
+semantics resolve the missing key.
 
 ## Paste a minimal workflow that reproduces the issue
 
